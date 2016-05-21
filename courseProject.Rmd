@@ -1,0 +1,77 @@
+---
+title: "Coursera Paractical Machine Learning Course Project"
+author: "Dmitry A. Grechka"
+date: "May 21, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Study design
+
+1. Error rate definition
+2. Splitting the data
+3. Picking features
+  + Using cross-validation
+4. Picking prediction function
+  + Using cross-validation
+5. Evaluating out of sample error using test set
+
+## Study
+
+### Initial preparation
+
+```{r data_loading,message=FALSE }
+library(caret)
+set.seed(12321)
+barbell_lifts  <- read.csv('pml-training.csv')
+```
+
+### 1. Choosing error rate
+
+Let's evaluate what kind of prediction we need
+
+```{r}
+str(barbell_lifts$classe)
+```
+
+We have the outcome variable `classe` to be a factor of 5.
+This means that we need to do classification to assign observation to one of five classes. The appropriate error rate measure for this kind of classification is **accuracy** which accounts for false positives/negatives equally.
+
+### 2. Splitting the data
+
+To properly choose the training, testing, validation data set we need to evaluate the amount of available data.
+
+```{r}
+nrow(barbell_lifts)
+```
+
+We have thousands of observations in pml-training.csv which is large enough.
+We can follow the following typical splitting scheme for large datases:
+
+* 60% training
+* 20% testing
+* 20% validation
+
+We will use testing dataset for refinement of features and prediction functions, validation dataset for final out-of-sample error evaluation
+
+``` {r splitting_data}
+inValidation <- createDataPartition(y=barbell_lifts$classe, p=0.2,list=F)
+
+validation <- barbell_lifts[inValidation,]
+
+nonValidation <- barbell_lifts[-inValidation,]
+inTrain <- createDataPartition(y=nonValidation$classe, p=0.6,list=F)
+
+training <- nonValidation[inTrain,]
+testing <- nonValidation[-inTrain,]
+
+```
+
+### 3. Picking features
+
+```{r plotting_possible_features}
+library(corrplot)
+corrplot(training, method="pie")

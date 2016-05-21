@@ -1,0 +1,75 @@
+---
+title: "Thorough exploration"
+author: "Dmitry A. Grechka"
+date: "May 21, 2016"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r message=FALSE}
+library(varhandle)
+
+
+library(caret)
+library(ggplot2)
+set.seed(12321)
+barbell_lifts  <- read.csv('pml-training.csv')
+
+inValidation <- createDataPartition(y=barbell_lifts$classe, p=0.2,list=F)
+
+validation <- barbell_lifts[inValidation,]
+
+nonValidation <- barbell_lifts[-inValidation,]
+inTrain <- createDataPartition(y=nonValidation$classe, p=0.6,list=F)
+
+training <- nonValidation[inTrain,]
+testing <- nonValidation[-inTrain,]
+```
+
+# Eliminating variables 
+
+##Evaluation correlation with outcome
+```{r}
+calcCor <- function(x,y) {
+  convertedX <- switch(class(x),
+                integer = x,
+                factor = as.numeric(x),
+                numeric = x);
+  convertedY <- switch(class(y),
+                integer = y,
+                factor = as.numeric(y),
+                numeric= y);
+  return(cor(convertedX,convertedY,use='pairwise.complete.obs'));
+}
+
+possPredictorNames <- colnames(training)
+
+predCors <- c()
+suggnificance <- c()
+for (posPredName in possPredictorNames){
+  predCors <- c(predCors,calcCor(training$classe,training[[posPredName]]))
+}
+predCors.df <- data.frame(predictor=possPredictorNames,correlation=predCors)
+predCors.df.sorted <- predCors.df[order(abs(predCors.df$correlation),decreasing=T),]
+
+high.predCors.df <- predCors.df.sorted[abs(predCors.df.sorted$correlation)>0.05,]
+high.predCors.df
+
+```
+
+```{r}
+library(corrplot)
+inPredictors <- possPredictorNames %in% high.predCors.df$predictor
+training.predictors.ds <- training[,inPredictors]
+
+#asNumeric <- function(x) as.numeric(as.character(x))
+factorsNumeric <- function(d) modifyList(d, lapply(d[, sapply(d, is.factor)],   
+                                                   as.numeric))
+training.predictors.ds.f <- factorsNumeric(training.predictors.ds)
+corM <- cor(training.predictors.ds.f,use='pairwise.complete.obs')
+corrplot(corM,method = "pie",shade.col=NA,order="AOE")
+```
+
