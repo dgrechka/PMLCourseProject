@@ -9,7 +9,7 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## Study design
+# Study design
 
 1. Error rate definition
 2. Splitting the data
@@ -19,9 +19,9 @@ knitr::opts_chunk$set(echo = TRUE)
   + Using cross-validation
 5. Evaluating out of sample error using test set
 
-## Study
+# Study
 
-### Initial preparation
+## Initial preparation
 
 ```{r data_loading,message=FALSE }
 library(caret)
@@ -29,7 +29,7 @@ set.seed(12321)
 barbell_lifts  <- read.csv('pml-training.csv')
 ```
 
-### 1. Choosing error rate
+## 1. Choosing error rate
 
 Let's evaluate what kind of prediction we need
 
@@ -40,7 +40,7 @@ str(barbell_lifts$classe)
 We have the outcome variable `classe` to be a factor of 5.
 This means that we need to do classification to assign observation to one of five classes. The appropriate error rate measure for this kind of classification is **accuracy** which accounts for false positives/negatives equally.
 
-### 2. Splitting the data
+## 2. Splitting the data
 
 To properly choose the training, testing, validation data set we need to evaluate the amount of available data.
 
@@ -70,8 +70,77 @@ testing <- nonValidation[-inTrain,]
 
 ```
 
-### 3. Picking features
+## 3. Picking features
 
-```{r plotting_possible_features}
+### 3.1. Clearing data
+
+#### 3.1.1 Removing unrelated variables
+
+The dataset contains several variables that we do not want to use as predictors
+
+* user_name - we do not want to account a particular person doing dumbbell lifting
+* cvtd_timestamp - we do not want to account the date and time of the dumbbell lifting
+* X - we do not want to account dataset row number
+
+```{r echo=F}
+possPredictorNames <- colnames(training)
+
+factorPredictorsNamesToOmit<- c('user_name','cvtd_timestamp','X','classe')
+
+filteredPredicotrsNames <- c()
+
+for (posPredName in possPredictorNames){
+  if (posPredName %in% factorPredictorsNamesToOmit) {
+    next # we are interested only in unrelated variables
+  }
+  
+  filteredPredicotrsNames <- c(filteredPredicotrsNames,posPredName)
+}
+
+possPredictorNames <- filteredPredicotrsNames
+```
+
+After this filtering there are `r length(possPredictorNames)` possible predictors left.
+
+#### 3.1.2 Converting factors with 'numeric' levels to real numeric
+The data set contains several variables that are numeric, but treated as factors during import. Converting them to numeric
+
+```{r echo=F, warning=F}
+
+for (posPredName in possPredictorNames){
+  if(class(training[[posPredName]]) == 'factor') {
+    training[[posPredName]] <- as.numeric(as.character(training[[posPredName]])) #converting factor to cumeric via character
+  }
+}
+
+training <- training[,names(training) %in% c('classe',filteredPredicotrsNames)]
+```
+
+#### 3.1.3 Identifing and elemination near zero variance predictors
+
+```{r}
+nzvars <- nearZeroVar(training)
+training <- training[,-nzvars]
+```
+
+After this stage there are `r ncol(training)-1` presictors left
+
+#### 3.1.4 Handling correlated predictors
+The data set contains `r ncol(training)-1` possible predictor variables. It is worse using all of them as some of them are not correlated at all with the outcome variable. Thraing predictor function with these uncorrelated predictors will capture unnesesary noise instead of explaing outcome variance.
+
+```{r echo=F}
+
+predictorsOnly <- training[,names(training) != 'classe']
+
+varM <- cor(predictorsOnly,use='complete.obs')
 library(corrplot)
-corrplot(training, method="pie")
+corrplot(varM,method = 'pie',order='hclust')
+```
+
+Calculating correlation between the outcome variable and all possible predictors.
+
+```{r echo=F}
+corrTreshold <- 0.05
+```
+
+it turns out that only !!! of predictors has correlation greater or equal than !!! with the outcome.
