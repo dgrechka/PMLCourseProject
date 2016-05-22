@@ -15,11 +15,8 @@ knitr::opts_chunk$set(cache = TRUE)
 1. Error rate definition
 2. Splitting the data
 3. Picking features
-  + Clearing data: Removing unrelated variables
-  + Clearing data: Converting factors with 'numeric' levels to real numeric
-  + Clearing data: Identifing and elemination near zero variance predictors
-  + Clearing data: Eliminating variables with lots of NA
-  + Transforming covariates: Handling correlated predictors
+  + Clearing data
+  + Transforming covariates
 4. Picking prediction function
   + Setting cross-validation options for parameter tuning
   + Tuning different prdiction functions
@@ -44,7 +41,7 @@ str(barbell_lifts$classe)
 ```
 
 We have the outcome variable `classe` to be a factor of 5.
-This means that we need to do classification to assign observation to one of five classes. The appropriate error rate measure for this kind of classification is **accuracy** which accounts for false positives/negatives equally.
+This means that we need to do classification to assign observation to one of five classes. The appropriate error rate measure for this kind of classification is **accuracy** which accounts for false positives/negatives equally. Another possible measure is area under the ROC curve (AUC) but we will use accuracy.
 
 ## 2. Splitting the data
 
@@ -55,12 +52,15 @@ nrow(barbell_lifts)
 ```
 
 We have thousands of observations in pml-training.csv which is large enough.
-We can follow the following typical splitting scheme for large datases:
+We can follow the following typical splitting scheme for the datases:
 
 * 70% training
 * 30% testing
 
+As a validation set, we will assume final results of 20 question quiz.
+
 We will use 10-fold  cross validation on training data set for prediction functions tuning. Testing dataset will be used for final out-of-sample error evaluation
+
 
 ``` {r splitting_data}
 inTrain <- createDataPartition(y=barbell_lifts$classe, p=0.7,list=F)
@@ -74,7 +74,7 @@ testing <- barbell_lifts[-inTrain,]
 
 ### 3.1. Clearing data
 
-#### 3.1.1 Removing unrelated variables
+#### Removing unrelated variables
 
 The dataset contains several variables that we do not want to use as predictors
 
@@ -102,7 +102,7 @@ possPredictorNames <- filteredPredicotrsNames
 
 After this filtering there are **`r length(possPredictorNames)`** possible predictors left.
 
-#### 3.1.2 Converting factors with 'numeric' levels to real numeric
+#### Converting factors with 'numeric' levels to real numeric
 The data set contains several variables that are numeric, but treated as factors during import. Converting them to numeric
 
 ```{r echo=F, warning=F}
@@ -116,16 +116,16 @@ for (posPredName in possPredictorNames){
 training <- training[,names(training) %in% c('classe',filteredPredicotrsNames)]
 ```
 
-#### 3.1.3 Identifing and elemination near zero variance predictors
+#### Identifing and elemination near zero variance predictors
 
 ```{r}
 nzvars <- nearZeroVar(training)
 training <- training[,-nzvars]
 ```
 
-After this stage there are **`r ncol(training)-1`** presictors left
+After this stage there are **`r ncol(training)-1`** predictors left
 
-#### 3.1.4 Eliminating variables with lots of NA
+#### Eliminating variables with lots of NA
 
 ```{r echo=F}
 naAllowedFraction <- .1
@@ -165,7 +165,7 @@ heatmap(x = varM, col = varMcol, symm = TRUE)
 
 We can see that there are several correlated varaible clusters.
 
-We will reduce predictor space dimensions by appling PCA.
+We will reduce predictor space dimensions by appling PCA, with default desired described variance threshold of 95%.
 
 ```{r}
 predictorsOnly <- training[,names(training) != 'classe']
@@ -179,9 +179,10 @@ After this stage we have **`r ncol(pcaPredictedTraining)-1`** linear independent
 
 ## 4. Picking predictor function
 
-### 4.1 Setting parameter tuning options
+### Prediction function parameter tuning with Cross Validation
 
-We will use 10-fold cross validation (as out dataset is large enough).
+We will use 10-fold cross validation (as our dataset is large enough).
+This should keep both bias and varaince from being exream.
 
 ```{r}
 trainOptions <- trainControl(
@@ -190,11 +191,11 @@ trainOptions <- trainControl(
 )
 ```
 
-### 4.2 Tring different prediction function families, tuning their parameters
+### Tring different prediction function families, tuning their parameters
 
-We will use caretEnsemble package to traing different models with the same cross-validation options for parameters tuning
+We will try to train a set of models of different families with the same cross-validation options for parameters tuning
 
-```{r results='hide'}
+```{r results='hide', warning=F}
 
 rpartModel<-train(classe ~ .,data = pcaPredictedTraining,trControl = trainOptions,method="rpart")
 rfModel<-train(classe ~ .,data = pcaPredictedTraining,trControl = trainOptions,method="rf")
@@ -210,14 +211,14 @@ trained <- list(
   gbm=gbmModel,
   lda=ldaModel,
   nb=nbModel,
-  svm=svmRadial,
+  svm=svmRadialModel,
   nnet=nnetModel
 )
 ```
 
-### 4.3 Evaluating in-sample & out of sample errors
+### Evaluating in-sample & out of sample errors
 
-```{r echo=F}
+```{r echo=F, warning=F}
 
 #preprocessing the testing data the same way as we did with traiing
 
@@ -251,26 +252,26 @@ errorRates <- data.frame(method = methods,in_sample_accuracy=inSampleErrors,out_
 errorRates
 ```
 
-We can see that Random forests are 100% accurate for traininig sample so it looks like overfitting.
+We can see that Random forest are 100% accurate for traininig sample so it looks like overfitting.
 But out-of-sample accuracy shows that this overfitting works better than other methods.
 
-### 4.4 Combining the models
+### Combining the models
 
 We can check how the trained models are consistent in thier classification
 
 ```{r}
+library(corrplot)
 corrplot(modelCor(resamples(trained)),method='pie')
 ```
 
-So the models are not very consistent. We can combine them to try to get even better prediction.
+So the models are not very consistent. This is good as we can combine them to try to get even better prediction taking advantages of each of them.
 
-#### 4.4.1 ensampling all the models using simple voting (mode calculation)
+#### Ensampling the models using simple voting (mode calculation)
 
 Let's try 2 combined predictors: combining all the predictors and most accurate predictors.
-Combination can be done by using simple voting via mode calculation.
-the most common class among all `r length(trained)` will be chosen as final class.
+Combination can be done by using simple voting via mode calculation (the most common predicted value accross several predictors will be chosen as final value).
 
-```{r echo=F}
+```{r echo=F, warning=F}
 
 calcmode <- function(v) {
    uniqv <- unique(v)
@@ -301,9 +302,9 @@ outOfSampleCombinedPrediction <- predictMode(trained,pcaPredictedTesting,levels(
 confM <- confusionMatrix(pcaPredictedTesting$classe,outOfSampleCombinedPrediction)
 outOfSampleAcc <- confM$overall[["Accuracy"]]
 
-combinedErrorRates <- data.frame(method = 'all combined (mode)',in_sample_accuracy=inSampleAcc,out_of_sample_accuracy=outOfSampleAcc)
+combinedErrorRates <- data.frame(method = 'all combined',in_sample_accuracy=inSampleAcc,out_of_sample_accuracy=outOfSampleAcc)
 
-errorRates <- rbind(errorRates,combinedErrorRates)
+#errorRates <- rbind(errorRates,combinedErrorRates)
 
 trained.best <- trained[!(names(trained) %in% c('rpart','lda','"nb'))]
 
@@ -314,22 +315,24 @@ outOfSampleCombinedPrediction <- predictMode(trained.best,pcaPredictedTesting,le
 confM <- confusionMatrix(pcaPredictedTesting$classe,outOfSampleCombinedPrediction)
 outOfSampleAcc <- confM$overall[["Accuracy"]]
 
-combinedErrorRates <- data.frame(method = 'rf,gbm,svm,nnet combined (mode)',in_sample_accuracy=inSampleAcc,out_of_sample_accuracy=outOfSampleAcc)
+combinedErrorRates2 <- data.frame(method = 'rf,gbm,svm,nnet combined',in_sample_accuracy=inSampleAcc,out_of_sample_accuracy=outOfSampleAcc)
 
-errorRates <- rbind(errorRates,combinedErrorRates)
-errorRates
+rbind(combinedErrorRates,combinedErrorRates2)
+
+#errorRates <- rbind(errorRates,combinedErrorRates)
+#errorRates
 ```
 
 ## 5. Final model choice
 
-It it reasonable to choose the "rf,gbm,svm,nnet combined model"" as it seems to be balacned from overfitting.
-This predictor is accurate enough in the same time.
+It it reasonable to choose the "rf,gbm,svm,nnet combined model" as it seems to be protected from overfitting by balancing.
+This predictor is accurate enough in the same time with out of sample accuracy **`r outOfSampleAcc`**.
 
 
 
 #### Final quiz prediciton.
 
-```{r echo=F,results='hide'}
+```{r echo=F,results='hide', warning=F}
 #assessing final quiz questions
 
 barbell_lifts_quiz  <- read.csv('pml-testing.csv')
@@ -345,6 +348,6 @@ quizPrediction <- predictMode(trained.best,pcaPredictedQuiz,levels(pcaPredictedT
 
 ```
 
-I've got "17/20 points earned (85%)" for the final quiz with the chosen model. 1,3,8 positions was misclassified.
+I've got **"17/20 points earned (85%)"** for the final quiz with the chosen model.
 
-Accuracy rate of 85% is explainable as it little bit less then out-of-sample accuracy expectation.
+Accuracy rate of 85% is explainable as it is little bit less then out-of-sample accuracy expectation.
