@@ -125,22 +125,154 @@ training <- training[,-nzvars]
 
 After this stage there are `r ncol(training)-1` presictors left
 
-#### 3.1.4 Handling correlated predictors
-The data set contains `r ncol(training)-1` possible predictor variables. It is worse using all of them as some of them are not correlated at all with the outcome variable. Thraing predictor function with these uncorrelated predictors will capture unnesesary noise instead of explaing outcome variance.
+#### 3.1.4 Eliminating variables with lots of NA
+
+
+Following possible predictors are excluded due to high NA portion
 
 ```{r echo=F}
+naAllowedFraction <- .1
+
+namesToCheck <- names(training)
+
+for(curName in namesToCheck) {
+  if(curName == 'classe')
+    next;
+  naFraction <- sum(is.na(training[[curName]]))/nrow(training)
+  if(naFraction>naAllowedFraction) {
+    print(paste("Fraction of NA in variable ",curName,' is ',naFraction,' which is more than ',naAllowedFraction,'.'))
+    training <- training[,names(training) != curName]
+  }
+}
+```
+
+After this stage there are `r ncol(training)-1` presictors left
+
+### 3.2 Transforming covariates
+
+#### 3.2.1 Handling correlated predictors
+
+Exploring the data set using correlation matrix plot from corrplot package.
+
+```{r echo=F, fig.keep='none'}
 
 predictorsOnly <- training[,names(training) != 'classe']
 
 varM <- cor(predictorsOnly,use='complete.obs')
 library(corrplot)
-corrplot(varM,method = 'pie',order='hclust')
+corrplot(varM,method = 'number',order='hclust')
 ```
 
-Calculating correlation between the outcome variable and all possible predictors.
+Visual representation of correlation matrix shows at least 6 groups of correlated predictors.
 
 ```{r echo=F}
-corrTreshold <- 0.05
+correlatedGroup1Names <- c('roll_belt','avg_roll_belt','min_pitch_belt','accel_belt_y','max_roll_belt','avg_yaw_belt','yaw_belt','min_roll_belt','total_accel_belt','max_picth_belt','pitch_belt','avg_pitch_belt','accel_belt_z')
+
 ```
 
-it turns out that only !!! of predictors has correlation greater or equal than !!! with the outcome.
+Exploring group #1 of `r length(correlatedGroup1Names)` variables for example.
+This group has belt sensors related variables.
+
+```{r echo=F}
+correlatedGroup1 <- training[,names(training) %in% correlatedGroup1Names]
+correlatedGroup1CM <- cor(correlatedGroup1,use='complete.obs')
+corrplot(correlatedGroup1CM,method = 'number',order='hclust')
+pcaPreProc1 <- preProcess(correlatedGroup1,method="pca")
+```
+
+`r pcaPreProc1$numComp` principal components of this group describe `r pcaPreProc1$thresh*100`% of variation.
+
+```{r echo=F}
+
+pcaGroup <- function(varaibleNames,groupName) {# side effect on training
+  stopifnot(sum(names(training) %in% varaibleNames) == length(varaibleNames))
+  correlatedGroup.i <- training[,names(training) %in% varaibleNames]
+  pcaPreProc.i <- preProcess(correlatedGroup.i,method="pca")
+  pcaGrp.i <- predict(pcaPreProc.i,newdata=training)
+  
+  #corM <- cor(correlatedGroup.i,use='complete.obs')
+  #corrplot(corM,method = 'number',order='hclust')
+  
+  training <- training[,!(names(training) %in% varaibleNames)] #removing correlated variables
+  for(i in 1:pcaPreProc.i$numComp) {
+    training[[paste(groupName,'.PC',i,sep = '')]] <- pcaGrp.i[[paste('PC',i,sep = '')]]
+  }
+  list(pcaNum=pcaPreProc.i$numComp,predictFunc = pcaPreProc.i, transformedDS = training, groupName=groupName)
+}
+
+pcaGrp1 <- pcaGroup(correlatedGroup1Names,'grp1')
+training = pcaGrp1$transformedDS
+```
+Replacing `r length(correlatedGroup1Names)` correlated predictors of group#1 with their `r pcaGrp1$pcaNum` principle components. Training dataset now has `r ncol(training)-1` predictors.
+
+```{r echo=F}
+correlatedGroup2Names <- c('var_yaw_belt','amplitude_roll_belt','stddev_yaw_belt','stddev_pitch_belt','var_pitch_belt','stddev_roll_belt','var_roll_belt','amplitude_pitch_belt','var_total_accel_belt')
+
+pcaGrp2 <- pcaGroup(correlatedGroup2Names,'grp2')
+training = pcaGrp2$transformedDS
+```
+
+Replacing `r length(correlatedGroup2Names)` correlated predictors of group#2 with their `r pcaGrp2$pcaNum` principle components. Training dataset now has `r ncol(training)-1` predictors.
+
+```{r echo=F}
+correlatedGroup3Names <- c('var_accel_dumbbell','max_roll_dumbbell','amplitude_roll_dumbbell','stddev_pitch_dumbbell','var_pitch_dumbbell','stddev_roll_dumbbell','var_roll_dumbbell','amplitude_pitch_dumbbell','stddev_yaw_dumbbell','var_yaw_dumbbell')
+
+pcaGrp3 <- pcaGroup(correlatedGroup3Names,'grp3')
+training = pcaGrp3$transformedDS
+```
+
+Replacing `r length(correlatedGroup3Names)` correlated predictors of group#3 with their `r pcaGrp3$pcaNum` principle components. Training dataset now has `r ncol(training)-1` predictors.
+
+#### 3.2.2 Removing 100% correlated predictors
+
+```{r echo=F}
+
+toLeave <- c('kurtosis_roll_belt','kurtosis_roll_dumbbell','kurtosis_roll_forearm')
+toRemove <- c('max_yaw_belt','min_yaw_belt','max_yaw_dumbbell','min_yaw_dumbbell','max_yaw_forearm','min_yaw_forearm')
+#corM <- cor(training[,names(training) %in% c(toLeave,toRemove)],use='complete.obs')
+#corrplot(corM,method = 'number',order='hclust')
+
+training <- training[,!(names(training) %in% toRemove)] #removing correlated variables
+```
+
+Kurtosis variables **`r paste(toLeave)`** are 100% correlated to corresponding min/max dumbbell variables **`r paste(toRemove)`**. Leaving only kurtosis variables.
+
+Training dataset now has `r ncol(training)-1` predictors.
+
+```{r echo=F}
+#final check of covaraites
+#corM <- cor(training[,names(training) != 'classe'],use='complete.obs')
+#corrplot(corM,method = 'number',order='hclust')
+```
+
+## 4. Picking predictor function
+
+
+```{r}
+rpartModel <- train("classe ~ .",training,method="rpart")
+```
+
+We will evaluate predictor functions using testing portions of data.
+```{r echo=F}
+
+for (posPredName in possPredictorNames){
+  if(class(testing[[posPredName]]) == 'factor') {
+    testing[[posPredName]] <- as.numeric(as.character(testing[[posPredName]])) #converting factor to cumeric via character
+  }
+}
+
+testing <- testing[,names(testing) %in% c('classe',possPredictorNames)]
+
+applyPcaGroup <- function(obj, data) {
+  prediction <- predict(obj$predictFunc,newdata=data)
+  for(i in 1:obj$pcaNum) {
+    prediction[[paste(obj$groupName,'.PC',i,sep = '')]] <- prediction[[paste('PC',i,sep = '')]]
+    prediction <- prediction[,names(prediction) != paste('PC',i,sep = '')]
+  }
+  return(prediction)
+}
+
+testing.preproccessed <- applyPcaGroup(pcaGrp1,testing)
+testing.preproccessed <- applyPcaGroup(pcaGrp2,testing.preproccessed)
+testing.preproccessed <- applyPcaGroup(pcaGrp3,testing.preproccessed)
+```
