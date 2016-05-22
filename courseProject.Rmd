@@ -14,9 +14,15 @@ knitr::opts_chunk$set(echo = TRUE)
 1. Error rate definition
 2. Splitting the data
 3. Picking features
-  + Using cross-validation
+  + Clearing data: Removing unrelated variables
+  + Clearing data: Converting factors with 'numeric' levels to real numeric
+  + Clearing data: Identifing and elemination near zero variance predictors
+  + Clearing data: Eliminating variables with lots of NA
+  + Transforming covariates: Handling correlated predictors
 4. Picking prediction function
-  + Using cross-validation
+  + Setting cross-validation options for parameter tuning
+  + Tunning different functions
+  + Ensembling final predictor
 5. Evaluating out of sample error using test set
 
 # Study
@@ -51,22 +57,16 @@ nrow(barbell_lifts)
 We have thousands of observations in pml-training.csv which is large enough.
 We can follow the following typical splitting scheme for large datases:
 
-* 60% training
-* 20% testing
-* 20% validation
+* 70% training
+* 30% testing
 
-We will use testing dataset for refinement of features and prediction functions, validation dataset for final out-of-sample error evaluation
+We will use 10-fold  cross validation on training data set for prediction functions tuning. Testing dataset will be used for final out-of-sample error evaluation
 
 ``` {r splitting_data}
-inValidation <- createDataPartition(y=barbell_lifts$classe, p=0.2,list=F)
+inTrain <- createDataPartition(y=barbell_lifts$classe, p=0.7,list=F)
 
-validation <- barbell_lifts[inValidation,]
-
-nonValidation <- barbell_lifts[-inValidation,]
-inTrain <- createDataPartition(y=nonValidation$classe, p=0.6 * 0.8,list=F)
-
-training <- nonValidation[inTrain,]
-testing <- nonValidation[-inTrain,]
+training <- barbell_lifts[inTrain,]
+testing <- barbell_lifts[-inTrain,]
 
 ```
 
@@ -100,7 +100,7 @@ for (posPredName in possPredictorNames){
 possPredictorNames <- filteredPredicotrsNames
 ```
 
-After this filtering there are `r length(possPredictorNames)` possible predictors left.
+After this filtering there are **`r length(possPredictorNames)`** possible predictors left.
 
 #### 3.1.2 Converting factors with 'numeric' levels to real numeric
 The data set contains several variables that are numeric, but treated as factors during import. Converting them to numeric
@@ -123,70 +123,49 @@ nzvars <- nearZeroVar(training)
 training <- training[,-nzvars]
 ```
 
-After this stage there are `r ncol(training)-1` presictors left
+After this stage there are **`r ncol(training)-1`** presictors left
 
 #### 3.1.4 Eliminating variables with lots of NA
-
-
-Following possible predictors are excluded due to high NA portion
 
 ```{r echo=F}
 naAllowedFraction <- .1
 
 namesToCheck <- names(training)
 
+eliminatedDueNACount <- 0
+
 for(curName in namesToCheck) {
   if(curName == 'classe')
     next;
   naFraction <- sum(is.na(training[[curName]]))/nrow(training)
   if(naFraction>naAllowedFraction) {
-    print(paste("Fraction of NA in variable ",curName,' is ',naFraction,' which is more than ',naAllowedFraction,'.'))
+    #print(paste("Fraction of NA in variable ",curName,' is ',naFraction,' which is more than ',naAllowedFraction,'.'))
+    eliminatedDueNACount <- eliminatedDueNACount+1
     training <- training[,names(training) != curName]
   }
 }
 ```
 
-After this stage there are `r ncol(training)-1` presictors left
+After excluding the varaibles wich have more than 10% of NA values (there were `r eliminatedDueNACount` such varaibles) there are **`r ncol(training)-1`** presictors left
 
-### 3.2 Transforming covariates
+### 3.2 Transforming covariates:
 
-#### 3.2.1 Handling correlated predictors
+#### Handling correlated predictors
 
-Exploring the data set using correlation matrix plot from corrplot package.
+Looking at the correlaction matrix of all `r ncol(training)-1` predictors
 
-```{r echo=F, fig.keep='none'}
+```{r}
 
 predictorsOnly <- training[,names(training) != 'classe']
+varM <- cor(predictorsOnly)
+varMcol<- colorRampPalette(c("red", "white", "blue"))(20)
+heatmap(x = varM, col = varMcol, symm = TRUE)
 
-varM <- cor(predictorsOnly,use='complete.obs')
-library(corrplot)
-corrplot(varM,method = 'number',order='hclust')
 ```
 
-```{r echo=F}
+We can see that there are several correlated varaible clusters.
 
-pcaGroup <- function(varaibleNames,groupName) {# side effect on training
-  stopifnot(sum(names(training) %in% varaibleNames) == length(varaibleNames))
-  correlatedGroup.i <- training[,names(training) %in% varaibleNames]
-  pcaPreProc.i <- preProcess(correlatedGroup.i,method="pca")
-  pcaGrp.i <- predict(pcaPreProc.i,newdata=training)
-  
-  #corM <- cor(correlatedGroup.i,use='complete.obs')
-  #corrplot(corM,method = 'number',order='hclust')
-  
-  training <- training[,!(names(training) %in% varaibleNames)] #removing correlated variables
-  for(i in 1:pcaPreProc.i$numComp) {
-    training[[paste(groupName,'.PC',i,sep = '')]] <- pcaGrp.i[[paste('PC',i,sep = '')]]
-  }
-  list(pcaNum=pcaPreProc.i$numComp,predictFunc = pcaPreProc.i, transformedDS = training, groupName=groupName)
-}
-```
-
-```{r echo=F}
-#final check of covaraites
-#corM <- cor(training[,names(training) != 'classe'],use='complete.obs')
-#corrplot(corM,method = 'number',order='hclust')
-```
+We will reduce predictor space dimensions by appling PCA.
 
 ```{r}
 predictorsOnly <- training[,names(training) != 'classe']
@@ -196,19 +175,48 @@ pcaPredictedTraining <- predict(pcaPreProc,predictorsOnly)
 pcaPredictedTraining$classe <- training$classe
 ```
 
+After this stage we have **`r ncol(pcaPredictedTraining)-1`** linear independent principal component predictor.
+
 ## 4. Picking predictor function
 
+### 4.1 Setting parameter tuning options
+
+We will use 10-fold cross validation (as out dataset is large enough).
 
 ```{r}
-#testMask <- createDataPartition(pcaPredictedTraining$classe, p=0.1,list=F)
-#pcaPredictedTrainingTrunc <- pcaPredictedTraining[testMask,]
+trainOptions <- trainControl(
+   method = "cv",
+   number=10 #number of folds
+)
+```
 
-rpartModel <- train(classe ~ .,data=pcaPredictedTraining,method="rpart")
-rfModel <- train(classe ~ .,pcaPredictedTraining,method="rf")
-gbmModel <- train(classe ~ .,pcaPredictedTraining,method="gbm")
-ldaModel <- train(classe ~ .,pcaPredictedTraining,method="lda")
-bayesModel <- train(classe ~ .,pcaPredictedTraining,method="nb")
-svmModel <- train(classe ~ .,pcaPredictedTraining,method="svmRadial")
+### 4.2 Tring different prediction function families, tuning their parameters
+
+We will use caretEnsemble package to traing different models with the same cross-validation options for parameters tuning
+
+```{r}
+library("caretEnsemble")
+
+trained <- caretList(classe ~ .,
+                     data = training,
+                     trControl = trainOptions,
+                     tuneList = list(
+                       rpart_pca=caretModelSpec(method="rpart",preProcess="pca"),
+                       #rf_pca=caretModelSpec(method="rf",preProcess="pca"),
+                       #gbm_pca=caretModelSpec(method="gbm",preProcess="pca"),
+                       lda_pca=caretModelSpec(method="lda",preProcess="pca"),
+                       #nb_pca=caretModelSpec(method="nb",preProcess="pca"),
+                       #svm_pca=caretModelSpec(method="svmRadial",preProcess="pca")
+                       nnet=caretModelSpec(method="nnet")
+                      )
+                     )
+
+#rpartModel <- train(classe ~ .,data=pcaPredictedTraining,method="rpart",tr)
+#rfModel <- train(classe ~ .,pcaPredictedTraining,method="rf")
+#gbmModel <- train(classe ~ .,pcaPredictedTraining,method="gbm")
+#ldaModel <- train(classe ~ .,pcaPredictedTraining,method="lda")
+#bayesModel <- train(classe ~ .,pcaPredictedTraining,method="nb")
+#svmModel <- train(classe ~ .,pcaPredictedTraining,method="svmRadial")
 
 ```
 
@@ -222,10 +230,5 @@ for (posPredName in possPredictorNames){
   }
 }
 
-testing <- testing[,names(testing) %in% c('classe',possPredictorNames)]
 
-
-testing.preproccessed <- applyPcaGroup(pcaGrp1,testing)
-testing.preproccessed <- applyPcaGroup(pcaGrp2,testing.preproccessed)
-testing.preproccessed <- applyPcaGroup(pcaGrp3,testing.preproccessed)
 ```
