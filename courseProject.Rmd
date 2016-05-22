@@ -7,6 +7,7 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(cache = TRUE)
 ```
 
 # Study design
@@ -21,9 +22,8 @@ knitr::opts_chunk$set(echo = TRUE)
   + Transforming covariates: Handling correlated predictors
 4. Picking prediction function
   + Setting cross-validation options for parameter tuning
-  + Tunning different functions
-  + Ensembling final predictor
-5. Evaluating out of sample error using test set
+  + Tuning different prdiction functions
+5. Final model choice
 
 # Study
 
@@ -175,7 +175,7 @@ pcaPredictedTraining <- predict(pcaPreProc,predictorsOnly)
 pcaPredictedTraining$classe <- training$classe
 ```
 
-After this stage we have **`r ncol(pcaPredictedTraining)-1`** linear independent principal component predictor.
+After this stage we have **`r ncol(pcaPredictedTraining)-1`** linear independent principal component predictors.
 
 ## 4. Picking predictor function
 
@@ -194,35 +194,32 @@ trainOptions <- trainControl(
 
 We will use caretEnsemble package to traing different models with the same cross-validation options for parameters tuning
 
-```{r}
-library("caretEnsemble")
+```{r results='hide'}
 
-trained <- caretList(classe ~ .,
-                     data = training,
-                     trControl = trainOptions,
-                     tuneList = list(
-                       rpart_pca=caretModelSpec(method="rpart",preProcess="pca"),
-                       #rf_pca=caretModelSpec(method="rf",preProcess="pca"),
-                       #gbm_pca=caretModelSpec(method="gbm",preProcess="pca"),
-                       lda_pca=caretModelSpec(method="lda",preProcess="pca"),
-                       #nb_pca=caretModelSpec(method="nb",preProcess="pca"),
-                       #svm_pca=caretModelSpec(method="svmRadial",preProcess="pca")
-                       nnet=caretModelSpec(method="nnet")
-                      )
-                     )
+rpartModel<-train(classe ~ .,data = pcaPredictedTraining,trControl = trainOptions,method="rpart")
+rfModel<-train(classe ~ .,data = pcaPredictedTraining,trControl = trainOptions,method="rf")
+gbmModel<-train(classe ~ .,data = pcaPredictedTraining,trControl = trainOptions,method="gbm")
+ldaModel<-train(classe ~ .,data = pcaPredictedTraining,trControl = trainOptions,method="lda")
+nbModel<-train(classe ~ .,data = pcaPredictedTraining,trControl = trainOptions,method="nb")
+svmRadialModel<-train(classe ~ .,data = pcaPredictedTraining,trControl = trainOptions,method="svmRadial")
+nnetModel<-train(classe ~ .,data = pcaPredictedTraining,trControl = trainOptions,method="nnet")
 
-#rpartModel <- train(classe ~ .,data=pcaPredictedTraining,method="rpart",tr)
-#rfModel <- train(classe ~ .,pcaPredictedTraining,method="rf")
-#gbmModel <- train(classe ~ .,pcaPredictedTraining,method="gbm")
-#ldaModel <- train(classe ~ .,pcaPredictedTraining,method="lda")
-#bayesModel <- train(classe ~ .,pcaPredictedTraining,method="nb")
-#svmModel <- train(classe ~ .,pcaPredictedTraining,method="svmRadial")
-
+trained <- list(
+  rpart=rpartModel,
+  rf=rfModel,
+  gbm=gbmModel,
+  lda=ldaModel,
+  nb=nbModel,
+  svm=svmRadial,
+  nnet=nnetModel
+)
 ```
 
-We will evaluate out-of-sample error for each of the predictor function by using testing posrtion of initial data.
+### 4.3 Evaluating in-sample & out of sample errors
 
 ```{r echo=F}
+
+#preprocessing the testing data the same way as we did with traiing
 
 for (posPredName in possPredictorNames){
   if(class(testing[[posPredName]]) == 'factor') {
@@ -230,5 +227,124 @@ for (posPredName in possPredictorNames){
   }
 }
 
+pcaPredictedTesting <- predict(pcaPreProc,testing)
+
+#calculating accuacy
+
+methods <- c()
+inSampleErrors <- c()
+outOfSampleErrors <- c()
+for(i in 1:length(trained)) {
+  currentMethod <-trained[[i]]
+  methods <- c(methods,currentMethod$modelInfo$label)
+  
+  inSamplePrediction <- predict(currentMethod,newdata=pcaPredictedTraining)
+  confM <- confusionMatrix(pcaPredictedTraining$classe,inSamplePrediction)
+  inSampleErrors <-c(inSampleErrors,confM$overall[["Accuracy"]])
+  outOfSamplePrediction <- predict(currentMethod,newdata=pcaPredictedTesting)
+  confM <- confusionMatrix(pcaPredictedTesting$classe,outOfSamplePrediction)
+  outOfSampleErrors <-c(outOfSampleErrors,confM$overall[["Accuracy"]])
+}
+
+errorRates <- data.frame(method = methods,in_sample_accuracy=inSampleErrors,out_of_sample_accuracy=outOfSampleErrors)
+
+errorRates
+```
+
+We can see that Random forests are 100% accurate for traininig sample so it looks like overfitting.
+But out-of-sample accuracy shows that this overfitting works better than other methods.
+
+### 4.4 Combining the models
+
+We can check how the trained models are consistent in thier classification
+
+```{r}
+corrplot(modelCor(resamples(trained)),method='pie')
+```
+
+So the models are not very consistent. We can combine them to try to get even better prediction.
+
+#### 4.4.1 ensampling all the models using simple voting (mode calculation)
+
+Let's try 2 combined predictors: combining all the predictors and most accurate predictors.
+Combination can be done by using simple voting via mode calculation.
+the most common class among all `r length(trained)` will be chosen as final class.
+
+```{r echo=F}
+
+calcmode <- function(v) {
+   uniqv <- unique(v)
+   uniqv[which.max(tabulate(match(v, uniqv)))]
+}
+
+predictMode <- function(models,newdata,level_labels){
+  predictions <- matrix(ncol=length(models),nrow=nrow(newdata))
+  
+  results <- c()
+  
+  for(i in 1:length(models)) {
+    currentMethod <-models[[i]]
+    prediction <- predict(currentMethod,newdata=newdata)
+    predictions[,i] <- prediction
+  }
+  
+  for(i in 1:nrow(newdata)) {
+    results<-c(results,calcmode(predictions[i,]))
+  }
+  return(factor(results,labels=level_labels))
+}
+
+inSampleCombinedPrediction <- predictMode(trained,pcaPredictedTraining,levels(pcaPredictedTraining$classe))
+confM <- confusionMatrix(pcaPredictedTraining$classe,inSampleCombinedPrediction)
+inSampleAcc <- confM$overall[["Accuracy"]]
+outOfSampleCombinedPrediction <- predictMode(trained,pcaPredictedTesting,levels(pcaPredictedTesting$classe))
+confM <- confusionMatrix(pcaPredictedTesting$classe,outOfSampleCombinedPrediction)
+outOfSampleAcc <- confM$overall[["Accuracy"]]
+
+combinedErrorRates <- data.frame(method = 'all combined (mode)',in_sample_accuracy=inSampleAcc,out_of_sample_accuracy=outOfSampleAcc)
+
+errorRates <- rbind(errorRates,combinedErrorRates)
+
+trained.best <- trained[!(names(trained) %in% c('rpart','lda','"nb'))]
+
+inSampleCombinedPrediction <- predictMode(trained.best,pcaPredictedTraining,levels(pcaPredictedTraining$classe))
+confM <- confusionMatrix(pcaPredictedTraining$classe,inSampleCombinedPrediction)
+inSampleAcc <- confM$overall[["Accuracy"]]
+outOfSampleCombinedPrediction <- predictMode(trained.best,pcaPredictedTesting,levels(pcaPredictedTesting$classe))
+confM <- confusionMatrix(pcaPredictedTesting$classe,outOfSampleCombinedPrediction)
+outOfSampleAcc <- confM$overall[["Accuracy"]]
+
+combinedErrorRates <- data.frame(method = 'rf,gbm,svm,nnet combined (mode)',in_sample_accuracy=inSampleAcc,out_of_sample_accuracy=outOfSampleAcc)
+
+errorRates <- rbind(errorRates,combinedErrorRates)
+errorRates
+```
+
+## 5. Final model choice
+
+It it reasonable to choose the "rf,gbm,svm,nnet combined model"" as it seems to be balacned from overfitting.
+This predictor is accurate enough in the same time.
+
+
+
+#### Final quiz prediciton.
+
+```{r echo=F,results='hide'}
+#assessing final quiz questions
+
+barbell_lifts_quiz  <- read.csv('pml-testing.csv')
+
+for (posPredName in possPredictorNames){
+  if(class(barbell_lifts_quiz[[posPredName]]) == 'factor') {
+    barbell_lifts_quiz[[posPredName]] <- as.numeric(as.character(barbell_lifts_quiz[[posPredName]])) #converting factor to cumeric via character
+  }
+}
+
+pcaPredictedQuiz <- predict(pcaPreProc,barbell_lifts_quiz)
+quizPrediction <- predictMode(trained.best,pcaPredictedQuiz,levels(pcaPredictedTesting$classe))
 
 ```
+
+I've got "17/20 points earned (85%)" for the final quiz with the chosen model. 1,3,8 positions was misclassified.
+
+Accuracy rate of 85% is explainable as it little bit less then out-of-sample accuracy expectation.
